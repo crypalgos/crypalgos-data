@@ -22,6 +22,7 @@ class OrderStatus(str, Enum):
     REJECTED = "rejected"
 
 class Candle(BaseModel):
+    symbol: Optional[str] = None
     timestamp_ms: int
     open: float
     high: float

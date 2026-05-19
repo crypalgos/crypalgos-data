@@ -426,6 +426,7 @@ class DeltaAPI(BaseExchangeAPI):
                 
             chunk_candles = [
                 Candle(
+                    symbol=symbol,
                     timestamp_ms=int(r['time'] * 1000),
                     open=float(r['open']),
                     high=float(r['high']),

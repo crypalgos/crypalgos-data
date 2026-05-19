@@ -92,9 +92,10 @@ class DeltaExchangeClient(BaseExchangeClient):
         
         # Public Channels
         if msg_type == "all_trades":
-            return ("trade", Trade(
+            symbol = message.get("symbol", "")
+            return (f"trade.{symbol}", Trade(
                 exchange="delta",
-                symbol=message.get("symbol"),
+                symbol=symbol,
                 price=float(message.get("price")),
                 amount=float(message.get("size")),
                 timestamp=message.get("timestamp"),
@@ -102,7 +103,9 @@ class DeltaExchangeClient(BaseExchangeClient):
             ))
         
         if msg_type == "candlestick_1m":
-            return ("ohlcv", Candle(
+            symbol = message.get("symbol", "")
+            return (f"ohlcv.{symbol}", Candle(
+                symbol=symbol,
                 timestamp_ms=message.get("timestamp"),
                 open=float(message.get("open")),
                 high=float(message.get("high")),
@@ -113,9 +116,10 @@ class DeltaExchangeClient(BaseExchangeClient):
 
         if msg_type == "v2/ticker":
             quotes = message.get("quotes", {})
-            return ("ticker", Ticker(
+            symbol = message.get("symbol", "")
+            return (f"ticker.{symbol}", Ticker(
                 exchange="delta",
-                symbol=message.get("symbol"),
+                symbol=symbol,
                 bid=float(quotes.get("best_bid", 0)),
                 ask=float(quotes.get("best_ask", 0)),
                 last=float(message.get("close", 0)),
