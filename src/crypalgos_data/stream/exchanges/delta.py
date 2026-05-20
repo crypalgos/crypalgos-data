@@ -98,15 +98,19 @@ class DeltaExchangeClient(BaseExchangeClient):
                 symbol=symbol,
                 price=float(message.get("price")),
                 amount=float(message.get("size")),
-                timestamp=message.get("timestamp"),
+                timestamp=int(message.get("timestamp", 0) / 1000),
                 side=OrderSide.SELL if message.get("buyer_role") == "maker" else OrderSide.BUY
             ))
         
         if msg_type == "candlestick_1m":
             symbol = message.get("symbol", "")
+            # Convert microsecond timestamps to milliseconds
+            ts_ms = int((message.get("candle_start_time") or message.get("timestamp") or 0) / 1000)
+            # Align perfectly to clean 1-minute boundary (e.g. second=0, microsecond=0)
+            ts_ms = ts_ms - (ts_ms % 60000)
             return (f"ohlcv.{symbol}", Candle(
                 symbol=symbol,
-                timestamp_ms=message.get("timestamp"),
+                timestamp_ms=ts_ms,
                 open=float(message.get("open")),
                 high=float(message.get("high")),
                 low=float(message.get("low")),
