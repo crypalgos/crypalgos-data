@@ -97,17 +97,47 @@ def test_normalize_message_ticker(mock_client):
         "quotes": {
             "best_bid": "76040.0",
             "best_ask": "76060.0"
+        },
+        "oi": 1200.5,
+        "oi_value": 91200000.0,
+        "greeks": {
+            "delta": "0.45",
+            "gamma": "0.0002",
+            "theta": "-15.5",
+            "vega": "120.0",
+            "rho": "5.0",
+            "iv": "0.65"
         }
     }
     
-    normalized = mock_client.normalize_message(raw_ticker)
-    assert normalized is not None
-    topic, data = normalized
-    assert topic == "ticker"
-    assert data.symbol == "BTCUSD"
-    assert data.bid == 76040.0
-    assert data.ask == 76060.0
-    assert data.last == 76050.0
+    updates = mock_client.normalize_message(raw_ticker)
+    assert isinstance(updates, list)
+    
+    # Verify ticker
+    ticker_update = [u for u in updates if u[0] == "ticker"][0]
+    assert ticker_update is not None
+    ticker_data = ticker_update[1]
+    assert ticker_data.symbol == "BTCUSD"
+    assert ticker_data.bid == 76040.0
+    assert ticker_data.ask == 76060.0
+    assert ticker_data.last == 76050.0
+
+    # Verify Greeks
+    greeks_update = [u for u in updates if u[0] == "option_greeks"][0]
+    assert greeks_update is not None
+    greeks_data = greeks_update[1]
+    assert greeks_data.delta == 0.45
+    assert greeks_data.iv == 0.65
+
+    # Verify Mark Price
+    mp_update = [u for u in updates if u[0] == "mark_price"][0]
+    assert mp_update is not None
+    assert mp_update[1].mark_price == 76045.0
+
+    # Verify Open Interest
+    oi_update = [u for u in updates if u[0] == "open_interest"][0]
+    assert oi_update is not None
+    assert oi_update[1].open_interest == 1200.5
 
 @pytest.mark.asyncio
 async def test_streamer_manager_creation():

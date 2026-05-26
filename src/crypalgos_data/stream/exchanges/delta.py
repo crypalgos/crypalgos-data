@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union, Tuple
 import asyncio
 import logging
 import hmac
@@ -9,7 +9,9 @@ import datetime
 
 logger = logging.getLogger(__name__)
 from ...common.models import Candle, Ticker, Trade, Order, Position, Balance, OrderSide, OrderType, OrderStatus
+from ...common.market_data_models import OptionGreeks, MarkPrice, OpenInterest
 from ...common.base_stream import BaseExchangeClient
+from ...exchanges.delta_market_data import _extract_base_asset
 
 class DeltaExchangeClient(BaseExchangeClient):
     def __init__(self, broker, symbols=[], api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False):
@@ -93,7 +95,9 @@ class DeltaExchangeClient(BaseExchangeClient):
         # Public Channels
         if msg_type == "all_trades":
             symbol = message.get("symbol", "")
-            return (f"trade.{symbol}", Trade(
+            if message.get("price") is None or message.get("size") is None:
+                return None
+            return ("trade", Trade(
                 exchange="delta",
                 symbol=symbol,
                 price=float(message.get("price")),
@@ -103,12 +107,19 @@ class DeltaExchangeClient(BaseExchangeClient):
             ))
         
         if msg_type == "candlestick_1m":
+            if message.get("open") is None or message.get("close") is None:
+                return None
             symbol = message.get("symbol", "")
-            # Convert microsecond timestamps to milliseconds
-            ts_ms = int((message.get("candle_start_time") or message.get("timestamp") or 0) / 1000)
+            ts = message.get("candle_start_time") or message.get("timestamp") or 0
+            if ts > 1e15:
+                ts_ms = int(ts / 1000)
+            elif ts > 1e11:
+                ts_ms = int(ts)
+            else:
+                ts_ms = int(ts * 1000)
             # Align perfectly to clean 1-minute boundary (e.g. second=0, microsecond=0)
             ts_ms = ts_ms - (ts_ms % 60000)
-            return (f"ohlcv.{symbol}", Candle(
+            return ("ohlcv", Candle(
                 symbol=symbol,
                 timestamp_ms=ts_ms,
                 open=float(message.get("open")),
@@ -121,16 +132,70 @@ class DeltaExchangeClient(BaseExchangeClient):
         if msg_type == "v2/ticker":
             quotes = message.get("quotes", {})
             symbol = message.get("symbol", "")
-            return (f"ticker.{symbol}", Ticker(
+            ts = message.get("timestamp", 0)
+            if ts > 1e15:
+                ts_ms = int(ts / 1000)
+            elif ts > 1e11:
+                ts_ms = int(ts)
+            else:
+                ts_ms = int(ts * 1000)
+
+            ticker = Ticker(
                 exchange="delta",
                 symbol=symbol,
-                bid=float(quotes.get("best_bid", 0)),
-                ask=float(quotes.get("best_ask", 0)),
-                last=float(message.get("close", 0)),
-                mark_price=float(message.get("mark_price", 0)),
-                volume_24h=float(message.get("volume", 0)),
-                timestamp=int(message.get("timestamp", 0) / 1000)
-            ))
+                bid=float(quotes.get("best_bid") or 0),
+                ask=float(quotes.get("best_ask") or 0),
+                last=float(message.get("close") or 0),
+                mark_price=float(message.get("mark_price") or 0),
+                volume_24h=float(message.get("volume") or 0),
+                timestamp=ts_ms
+            )
+            updates = [("ticker", ticker)]
+
+            greeks_raw = message.get("greeks")
+            if greeks_raw:
+                base = _extract_base_asset(symbol)
+                greeks = OptionGreeks(
+                    exchange="delta",
+                    symbol=symbol,
+                    canonical_symbol=base,
+                    delta=float(greeks_raw.get("delta")) if greeks_raw.get("delta") else None,
+                    gamma=float(greeks_raw.get("gamma")) if greeks_raw.get("gamma") else None,
+                    theta=float(greeks_raw.get("theta")) if greeks_raw.get("theta") else None,
+                    vega=float(greeks_raw.get("vega")) if greeks_raw.get("vega") else None,
+                    rho=float(greeks_raw.get("rho")) if greeks_raw.get("rho") else None,
+                    iv=float(greeks_raw.get("iv")) if greeks_raw.get("iv") else None,
+                    timestamp_ms=ts_ms
+                )
+                updates.append(("option_greeks", greeks))
+
+            mp_val = message.get("mark_price")
+            if mp_val is not None:
+                base = _extract_base_asset(symbol)
+                mark_price = MarkPrice(
+                    exchange="delta",
+                    symbol=symbol,
+                    canonical_symbol=base,
+                    mark_price=float(mp_val),
+                    index_price=float(message.get("spot_price")) if message.get("spot_price") else None,
+                    timestamp_ms=ts_ms
+                )
+                updates.append(("mark_price", mark_price))
+
+            oi_val = message.get("oi")
+            if oi_val is not None:
+                base = _extract_base_asset(symbol)
+                oi_desc = OpenInterest(
+                    exchange="delta",
+                    symbol=symbol,
+                    canonical_symbol=base,
+                    open_interest=float(oi_val),
+                    open_interest_value=float(message.get("oi_value")) if message.get("oi_value") else None,
+                    timestamp_ms=ts_ms
+                )
+                updates.append(("open_interest", oi_desc))
+
+            return updates
 
         # Private Channels
         if msg_type == "orders":
