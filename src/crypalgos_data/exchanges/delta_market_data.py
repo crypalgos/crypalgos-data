@@ -371,8 +371,10 @@ class DeltaMarketDataAdapter(BaseMarketDataAdapter):
             ts = int(ticker.get("timestamp", 0))
             if ts == 0:
                 ts = int(time.time() * 1000)
-            # Delta timestamps might be in seconds
-            if ts < 1e12:
+            # Detect microseconds vs milliseconds vs seconds scale
+            if ts > 1e14:
+                ts = int(ts / 1000)
+            elif ts < 1e12:
                 ts = int(ts * 1000)
 
             funding_rates.append(
