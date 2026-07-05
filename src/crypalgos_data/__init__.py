@@ -25,7 +25,7 @@ from .common.market_data_models import (
     OpenInterest,
     OptionGreeks,
 )
-from .common.symbol_normalizer import SymbolNormalizer
+from .common.symbol_normalizer import SymbolNormalizer, normalize_symbol_string
 
 __all__ = [
     # ── Trading API ──
@@ -53,4 +53,5 @@ __all__ = [
     "OpenInterest",
     "OptionGreeks",
     "SymbolNormalizer",
+    "normalize_symbol_string",
 ]

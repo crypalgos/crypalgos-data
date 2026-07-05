@@ -139,3 +139,16 @@ class TestCoinDCXNormalization:
 
         assert norm.to_canonical("BTCINR") == "BTC"
         assert norm.to_native("BTC", InstrumentType.SPOT) == "BTCINR"
+
+
+# ── Phase 4 (T-DRY-4): static symbol string canonicalization ──────────────
+
+def test_normalize_symbol_string():
+    from crypalgos_data.common.symbol_normalizer import normalize_symbol_string
+
+    assert normalize_symbol_string("btc/usdt") == "BTCUSD"
+    assert normalize_symbol_string("BTC/USDT") == "BTCUSD"
+    assert normalize_symbol_string("ethusd") == "ETHUSD"
+    assert normalize_symbol_string(" SOLUSD ") == "SOLUSD"
+    # Options symbols keep their dashes (used for asset-class detection)
+    assert normalize_symbol_string("BTC-27MAY26-62000-C") == "BTC-27MAY26-62000-C"

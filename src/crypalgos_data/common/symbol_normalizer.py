@@ -27,6 +27,25 @@ from .market_data_models import Instrument, InstrumentType
 logger = logging.getLogger(__name__)
 
 
+def normalize_symbol_string(symbol: str) -> str:
+    """Static canonicalization of a user/canvas-supplied symbol string.
+
+    This is the ONLY place the "BTC/USDT" → "BTCUSD" convention lives:
+    strip separators, uppercase, and collapse the USDT quote to USD
+    (Delta-style perp naming). For instrument-aware mapping use
+    :class:`SymbolNormalizer`.
+
+    >>> normalize_symbol_string("btc/usdt")
+    'BTCUSD'
+    >>> normalize_symbol_string("ETHUSD")
+    'ETHUSD'
+    """
+    normalized = symbol.replace("/", "").strip().upper()
+    if normalized.endswith("USDT"):
+        normalized = normalized[:-1]
+    return normalized
+
+
 class SymbolNormalizer:
     """
     Bidirectional symbol normalizer scoped to a single exchange.
