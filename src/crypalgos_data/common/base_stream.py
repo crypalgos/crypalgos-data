@@ -1,9 +1,11 @@
 import abc
 import asyncio
-import logging
-import websockets
 import json
-from typing import Optional, List, Union, Tuple
+import logging
+from typing import List, Optional, Tuple, Union
+
+import websockets
+
 from ..stream.broker import ZMQBroker
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,20 @@ class BaseExchangeClient(abc.ABC):
                     await self.ws.send(json.dumps(self.get_subscription_payload()))
                     logger.info(f"Subscribed to {self.exchange_name} channels")
                     
-                    async for message in websocket:
+                    while self.is_running:
+                        try:
+                            message = await asyncio.wait_for(websocket.recv(), timeout=30)
+                        except asyncio.TimeoutError:
+                            # A TCP/WebSocket connection can remain open after
+                            # its exchange subscription stops producing data.
+                            # Force the outer reconnect path instead of leaving
+                            # consumers running forever with a silent feed.
+                            logger.warning(
+                                "%s WebSocket received no messages for 30 seconds; reconnecting",
+                                self.exchange_name,
+                            )
+                            break
+
                         data = json.loads(message)
                         updates = self.normalize_message(data)
                         if updates:
@@ -52,13 +67,13 @@ class BaseExchangeClient(abc.ABC):
                                 updates = [("trades", updates)]
                             elif isinstance(updates, tuple):
                                 updates = [updates]
-                            
+
                             for topic_suffix, normalized_data in updates:
                                 await self.broker.publish(
                                     topic=f"{topic_suffix}.{self.exchange_name}",
                                     data=normalized_data
                                 )
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error in {self.exchange_name} connection")
                 if self.is_running:
                     await asyncio.sleep(5)  # Reconnect delay

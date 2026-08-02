@@ -1,17 +1,45 @@
-from typing import List, Optional, Union, Tuple
 import asyncio
-import logging
-import hmac
-import hashlib
-import time
-import json
 import datetime
+import hashlib
+import hmac
+import json
+import logging
+import time
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
-from ...common.models import Candle, Ticker, Trade, Order, Position, Balance, OrderSide, OrderType, OrderStatus
-from ...common.market_data_models import OptionGreeks, MarkPrice, OpenInterest
+
+
+def _timestamp_to_milliseconds(timestamp: Any) -> Optional[int]:
+    """Normalize Delta seconds/ms/microseconds/nanoseconds timestamps to ms."""
+    try:
+        value = int(float(timestamp))
+    except (TypeError, ValueError):
+        return None
+    if value >= 1_000_000_000_000_000_000:
+        return value // 1_000_000
+    if value >= 1_000_000_000_000_000:
+        return value // 1_000
+    if value < 1_000_000_000_000:
+        return value * 1_000
+    return value
+
+
 from ...common.base_stream import BaseExchangeClient
+from ...common.market_data_models import MarkPrice, OpenInterest, OptionGreeks
+from ...common.models import (
+    Balance,
+    Candle,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Position,
+    Ticker,
+    Trade,
+)
 from ...exchanges.delta_market_data import _extract_base_asset
+
 
 class DeltaExchangeClient(BaseExchangeClient):
     def __init__(self, broker, symbols=[], api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False):
@@ -62,8 +90,8 @@ class DeltaExchangeClient(BaseExchangeClient):
             else:
                 # Some versions might return type: success or Authenticated message
                 logger.info(f"Delta WebSocket Auth Response: {auth_data}")
-        except asyncio.wait_for: # Just catch timeout generally
-            logger.error("Delta WebSocket Authentication TIMEOUT.")
+        except asyncio.TimeoutError:
+            logger.error("Delta WebSocket Authentication timed out.")
         except Exception as e:
             logger.error(f"Error during WebSocket Authentication: {e}")
 
@@ -95,30 +123,32 @@ class DeltaExchangeClient(BaseExchangeClient):
         # Public Channels
         if msg_type == "all_trades":
             symbol = message.get("symbol", "")
-            if message.get("price") is None or message.get("size") is None:
+            timestamp_ms = _timestamp_to_milliseconds(message.get("timestamp"))
+            if message.get("price") is None or message.get("size") is None or timestamp_ms is None:
                 return None
-            return ("trade", Trade(
-                exchange="delta",
-                symbol=symbol,
-                price=float(message.get("price")),
-                amount=float(message.get("size")),
-                timestamp=int(message.get("timestamp", 0) / 1000),
-                side=OrderSide.SELL if message.get("buyer_role") == "maker" else OrderSide.BUY
-            ))
+            return (
+                "trade",
+                Trade(
+                    exchange="delta",
+                    symbol=symbol,
+                    price=float(message["price"]),
+                    amount=float(message["size"]),
+                    timestamp=timestamp_ms,
+                    side=OrderSide.SELL if message.get("buyer_role") == "maker" else OrderSide.BUY,
+                ),
+            )
         
         if msg_type == "candlestick_1m":
             if message.get("open") is None or message.get("close") is None:
                 return None
             symbol = message.get("symbol", "")
-            ts = message.get("candle_start_time") or message.get("timestamp") or 0
-            if ts > 1e15:
-                ts_ms = int(ts / 1000)
-            elif ts > 1e11:
-                ts_ms = int(ts)
-            else:
-                ts_ms = int(ts * 1000)
-            # Align perfectly to clean 1-minute boundary (e.g. second=0, microsecond=0)
-            ts_ms = ts_ms - (ts_ms % 60000)
+            timestamp_ms = _timestamp_to_milliseconds(
+                message.get("candle_start_time") or message.get("timestamp")
+            )
+            if timestamp_ms is None:
+                return None
+            # Align the canonical candle start to the 1-minute boundary.
+            ts_ms = timestamp_ms - (timestamp_ms % 60_000)
             return ("ohlcv", Candle(
                 symbol=symbol,
                 timestamp_ms=ts_ms,
@@ -130,26 +160,28 @@ class DeltaExchangeClient(BaseExchangeClient):
             ))
 
         if msg_type == "v2/ticker":
-            quotes = message.get("quotes", {})
+            quotes = message.get("quotes") or {}
             symbol = message.get("symbol", "")
-            ts = message.get("timestamp", 0)
-            if ts > 1e15:
-                ts_ms = int(ts / 1000)
-            elif ts > 1e11:
-                ts_ms = int(ts)
-            else:
-                ts_ms = int(ts * 1000)
-
-            ticker = Ticker(
-                exchange="delta",
-                symbol=symbol,
-                bid=float(quotes.get("best_bid") or 0),
-                ask=float(quotes.get("best_ask") or 0),
-                last=float(message.get("close") or 0),
-                mark_price=float(message.get("mark_price") or 0),
-                volume_24h=float(message.get("volume") or 0),
-                timestamp=ts_ms
-            )
+            timestamp_ms = _timestamp_to_milliseconds(message.get("timestamp"))
+            # Delta's public ticker has used both nested quotes/close and the
+            # current best_bid/best_ask/last_price representation. Support
+            # both without ever using mark_price as an executable-price proxy.
+            try:
+                last = float(message.get("last_price", message.get("close", 0)) or 0)
+                ticker = Ticker(
+                    exchange="delta",
+                    symbol=symbol,
+                    bid=float(quotes.get("best_bid", message.get("best_bid", 0)) or 0),
+                    ask=float(quotes.get("best_ask", message.get("best_ask", 0)) or 0),
+                    last=last,
+                    mark_price=float(message.get("mark_price") or 0),
+                    volume_24h=float(message.get("volume_24h", message.get("volume", 0)) or 0),
+                    timestamp=timestamp_ms or 0,
+                )
+            except (TypeError, ValueError):
+                return None
+            if not symbol or timestamp_ms is None or last <= 0:
+                return None
             updates = [("ticker", ticker)]
 
             greeks_raw = message.get("greeks")
@@ -165,7 +197,7 @@ class DeltaExchangeClient(BaseExchangeClient):
                     vega=float(greeks_raw.get("vega")) if greeks_raw.get("vega") else None,
                     rho=float(greeks_raw.get("rho")) if greeks_raw.get("rho") else None,
                     iv=float(greeks_raw.get("iv")) if greeks_raw.get("iv") else None,
-                    timestamp_ms=ts_ms
+                    timestamp_ms=timestamp_ms,
                 )
                 updates.append(("option_greeks", greeks))
 
@@ -178,7 +210,7 @@ class DeltaExchangeClient(BaseExchangeClient):
                     canonical_symbol=base,
                     mark_price=float(mp_val),
                     index_price=float(message.get("spot_price")) if message.get("spot_price") else None,
-                    timestamp_ms=ts_ms
+                    timestamp_ms=timestamp_ms,
                 )
                 updates.append(("mark_price", mark_price))
 
@@ -191,7 +223,7 @@ class DeltaExchangeClient(BaseExchangeClient):
                     canonical_symbol=base,
                     open_interest=float(oi_val),
                     open_interest_value=float(message.get("oi_value")) if message.get("oi_value") else None,
-                    timestamp_ms=ts_ms
+                    timestamp_ms=timestamp_ms,
                 )
                 updates.append(("open_interest", oi_desc))
 

@@ -151,3 +151,22 @@ async def test_streamer_manager_creation():
     )
     assert len(manager.clients) == 1
     assert manager.clients[0].exchange_name == "delta"
+
+
+def test_normalize_message_current_delta_ticker_uses_last_price_and_ms_timestamp(mock_client):
+    updates = mock_client.normalize_message(
+        {
+            "type": "v2/ticker",
+            "symbol": "BTCUSD",
+            "last_price": "76100.5",
+            "mark_price": "75900.0",
+            "best_bid": "76100.0",
+            "best_ask": "76101.0",
+            "timestamp": 1_700_000_000_123_456,
+        }
+    )
+
+    ticker = next(data for topic, data in updates if topic == "ticker")
+    assert ticker.last == 76100.5
+    assert ticker.mark_price == 75900.0
+    assert ticker.timestamp == 1_700_000_000_123
